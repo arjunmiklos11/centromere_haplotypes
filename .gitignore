@@ -1,0 +1,6 @@
+prediction/.vscode
+prediction/inputs
+prediction/inputs_PLINK
+prediction/logs
+prediction/tmp
+prediction/weights
