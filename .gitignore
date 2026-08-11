@@ -4,3 +4,6 @@ prediction/inputs_PLINK
 prediction/logs
 prediction/tmp
 prediction/weights
+prediction/FUSION_jobs.txt
+prediction/covariates.tsv
+prediction/covariates_PLINK.tsv
