@@ -7,3 +7,4 @@ prediction/weights
 prediction/FUSION_jobs.txt
 prediction/covariates.tsv
 prediction/covariates_PLINK.tsv
+prediction/full_variant_tests

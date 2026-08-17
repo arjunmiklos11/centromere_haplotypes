@@ -164,8 +164,6 @@ cent_df <- data.frame(
     hsq_pval = unlist(hsq_pvals)
 )
 cent_df <- cent_df %>% column_to_rownames(var = "gene")
-# Writing to file
-write.table(cent_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/cent_df.tsv", sep = "\t", quote = FALSE, row.names = TRUE, col.names = TRUE)
 
 # W/out centromeres
 # Build df w/ rows as genes and columns for R2 and p-values for each model + V(G)/Vp, SE, and p-value
@@ -218,12 +216,6 @@ no_cent_df <- data.frame(
     hsq_pval = unlist(hsq_pvals)
 )
 no_cent_df <- no_cent_df %>% column_to_rownames(var = "gene")
-# Writing to file
-write.table(no_cent_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/no_cent_df.tsv", sep = "\t", quote = FALSE, row.names = TRUE, col.names = TRUE)
-
-## Reading in dfs and performing analysis
-cent_df = read.table("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/cent_df.tsv", sep= "\t")
-no_cent_df = read.table("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/no_cent_df.tsv", sep="\t")
 
 # Replacing NAs w/ -Inf (cases where models didn't converge; don't want to select these as best models)
 cent_df_copy <- cent_df
@@ -256,6 +248,14 @@ no_cent_df$best_pval <- sapply(1:nrow(no_cent_df), function(i) {
         return(NA)
     }
 })
+
+# Writing to file
+write.table(no_cent_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/no_cent_df.tsv", sep = "\t", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(cent_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/cent_df.tsv", sep = "\t", quote = FALSE, row.names = TRUE, col.names = TRUE)
+
+## Reading in dfs and performing analysis
+cent_df = read.table("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/cent_df.tsv", sep= "\t")
+no_cent_df = read.table("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/no_cent_df.tsv", sep="\t")
 
 ## Plotting histograms of best R2 values w/ and w/out centromeres
 # W/ centromeres
@@ -431,6 +431,10 @@ gene_map <- getBM(
 )
 better_wo_df <- left_join(better_wo_df, gene_map, by = "ensembl_gene_id")
 better_wo_df <- better_wo_df %>% relocate(ensembl_gene_id, .after = gene)
+
+# Writing tables w/ genes better or worse w/ centromeres to files
+write.table(better_w_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/better_w_cent.tsv", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(better_wo_df, file = "/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/weights/tables/better_wo_cent.tsv", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
 
 ## Making plots for genes w/ better/worse performance w/ centromere haplotypes included
 # Want to make box/dot plot showing distance to centromeres
