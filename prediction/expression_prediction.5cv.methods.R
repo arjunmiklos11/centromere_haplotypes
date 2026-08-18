@@ -3,30 +3,36 @@
 ### FROM SHUANGJIA
 
 # output: 
-# gene.cv.calls.1kg.methods.txt - store the predicted values for all samples across folds plus the true phenotype values
-# gene.cv.performance.1kg.methods.txt - store the cross-validation performance metrics for each method, including R-squared and p-value
-# gene.train.performance.1kg.methods.txt - store the training performance metrics for each method, including R-squared for each fold
+# gene.cv.calls.txt - store the predicted values for all samples across folds plus the true phenotype values
+# gene.cv.performance.txt - store the cross-validation performance metrics for each method, including R-squared and p-value
+# gene.train.performance.txt - store the training performance metrics for each method, including R-squared for each fold
+# gene.model.weights.tsv - store the coefficients for each variant for each model (rows: variants, columns: models)
 
 # Usage: Rscript expression_prediction.5cv.methods.R <gene_name> # ENSG00000196476.11
-
-### INSTEAD OF RUNNING THIS SCRIPT, CAN RUN FUSION INSTEAD (Runs the same models to predict expression, but uses different Bayesian approach than the one here (susie))
 
 library(susieR)
 library(Matrix)
 library(Rfast)
 library(data.table)
 library(glmnet)
+library(tidyverse)
 
 args <- commandArgs(trailingOnly = TRUE)
 
-# gene name 
-# gene = args[1] 
-gene = "ENSG00000000938.12"
+# gene name
+gene = args[1]
+# gene <- "ENSG00000042445.13"
 
-# 1. rescue gatk + 1kgsv prediction 
-# Reading in genotypes--> should match the per-gene genotype files outputted by input_generator.py (all variants w/in 1 Mb of TSS--> need to add centromere haplotypes too)
-# Path to match produced files from input_generator.py: paste0("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/inputs/", gene, "/", gene, ".1kg_rescue.geno.tsv")
-X = read.table(paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/collapse/var_1_to_1_rescue/separate_prediction/", gene, "/",gene, ".1kg_rescue.geno.tsv"), collapse = ""),
+# Reading in list of variants (w/out centromeres)
+variant_df <- read.table(paste0("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/inputs/", gene, "/", gene, ".full_variants.variant_info_no_centromeres.txt"),
+                sep = "\t",
+                header = FALSE,
+                col.names = c("variant_id", "chr", "start")) # Add "end" w/ cents included
+row.names(variant_df) <- variant_df$variant_id
+variant_df <- variant_df %>% select(c(chr, start)) # Add "end" w/ cents included
+
+# Reading in genotypes (w/out centromeres)
+X = read.table(paste(c("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/inputs/", gene, "/", gene, ".full_variants.geno_no_centromeres.tsv"), collapse = ""),
                 sep = "\t",
                 header = FALSE,
                 check.names = FALSE,
@@ -35,18 +41,16 @@ X = read.table(paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/
 # change inf (in TR callset) to 0 
 X[X == Inf] <- 0
 
-# read in covariates--> should match the covariate table outputted by input_generator.py (which was unchanged from what was read into input_generator.py)
-# Path produced by input_generator.py: /gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/covariates.tsv
-Z = read.table("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/susie/covariates.tsv",
+# read in covariates
+Z = read.table("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/covariates.tsv",
                sep = "\t",
                header = TRUE,
                row.names = 1,
                check.names = FALSE,
                stringsAsFactors = FALSE) # 430 * 40
 
-# phenotype - gene expression--> should also match per-gene gene expression output from input_generator.py (just the gene expression of the given gene)
-# Path to match produced files from input_generator.py: paste0("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/inputs/", gene, "/", gene, ".txt")
-y = read.table(paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/susie/genes/", gene, "/",gene, ".txt"), collapse = ""),
+# phenotype - gene expression
+y = read.table(paste(c("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/inputs/", gene, "/", gene, ".txt"), collapse = ""),
                sep = "\t",
                header = FALSE,
                check.names = FALSE,
@@ -55,7 +59,6 @@ y = read.table(paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/
 y <- as.matrix(y)
 Z <- as.matrix(Z) # nolint: object_name_linter.
 X <- as.matrix(X)
-# any(is.infinite(X))
 
 # remove covariates from both genotype and phenotype - residualization
 remove.covariate.effects <- function (X, Z, y) {
@@ -71,25 +74,22 @@ remove.covariate.effects <- function (X, Z, y) {
 
 out = remove.covariate.effects(X, Z, y[,1])
 
-
 #  important : genotypes are standardized and scaled here:
 scale_Xcov = scale(out$X) # samp * var 
 # scale phenotype # should have already been scaled before in my analysis; but not after correcting for covariates
 scale_ycov = scale(out$y)
 
 # CROSSVALIDATION ANALYSES
-### Why are we running these analyses outside of FUSION? They appear to be the same tests?
 set.seed(1)
 
 # create a matrix to store the cross-validation performance metrics for each method
 cv.performance = matrix(NA,nrow=10,ncol=1) # 1 col
 rownames(cv.performance) = c("lasso_rsq","lasso_pval","ridge_rsq","ridge_pval","enet_rsq","enet_pval","top1_rsq","top1_pval","susie_rsq","susie_pval")
-colnames(cv.performance) = c('gatk')
+colnames(cv.performance) = c('all_variants')
 
 # create a matrix to store the training performance metrics for each method
 train.performance = matrix(NA,nrow=5,ncol=5) # 5 col: gatk * lasso, ridge, elastic net, top1, bayesian
 rownames(train.performance) = c('lasso','ridge','enet', 'top1','susie')
-
 
 # split data into 5 folds
 N = 430 
@@ -197,13 +197,96 @@ cv.performance[ 10, 1 ] = reg$coef[2,4]
 # add y to cv.calls for downstream analyses
 cv.calls[, 6] = scale_ycov
 
-# save cv.performance and cv.calls for downstream analyses
-write.table(cv.calls,paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/collapse/var_1_to_1_rescue/separate_prediction/", gene, "/",gene, ".cv.calls.1kg.methods.txt"), collapse = ""),quote=F,row.names =FALSE, col.names = TRUE, sep='\t')
+# Final refit on all samples, then store weights in a SNP x model matrix
+# Rows = SNPs, columns = model weights
+# Intercept is excluded from this table
 
-write.table(cv.performance,paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/collapse/var_1_to_1_rescue/separate_prediction/", gene, "/",gene, ".cv.performance.1kg.methods.txt"), collapse = ""),quote=F,row.names =TRUE,col.names = TRUE,sep='\t')
+# Make a dataframe with SNPs as row names
+final_weights <- data.frame(
+  lasso = rep(NA_real_, ncol(scale_Xcov)),
+  ridge = rep(NA_real_, ncol(scale_Xcov)),
+  enet = rep(NA_real_, ncol(scale_Xcov)),
+  top1 = rep(NA_real_, ncol(scale_Xcov)),
+  susie = rep(NA_real_, ncol(scale_Xcov)),
+  row.names = rownames(variant_df)
+)
+
+# Lasso
+lasso_final <- cv.glmnet(scale_Xcov, scale_ycov, alpha = 1, family = "gaussian")
+lasso_coef <- as.vector(coef(lasso_final, s = "lambda.min"))
+lasso_coef <- lasso_coef[-1]   # remove intercept
+names(lasso_coef) <- rownames(variant_df)
+final_weights$lasso[match(names(lasso_coef), rownames(final_weights))] <- as.numeric(lasso_coef)
+
+# Ridge
+ridge_final <- cv.glmnet(scale_Xcov, scale_ycov, alpha = 0, family = "gaussian")
+ridge_coef <- as.vector(coef(ridge_final, s = "lambda.min"))
+ridge_coef <- ridge_coef[-1]
+names(ridge_coef) <- rownames(variant_df)
+final_weights$ridge[match(names(ridge_coef), rownames(final_weights))] <- as.numeric(ridge_coef)
+
+# Elastic net
+enet_final <- cv.glmnet(scale_Xcov, scale_ycov, alpha = 0.5, family = "gaussian")
+enet_coef <- as.vector(coef(enet_final, s = "lambda.min"))
+enet_coef <- enet_coef[-1]
+names(enet_coef) <- rownames(variant_df)
+final_weights$enet[match(names(enet_coef), rownames(final_weights))] <- as.numeric(enet_coef)
+
+# Top1
+top1_w <- t(scale_Xcov) %*% scale_ycov / (nrow(scale_Xcov) - 1)
+top1_w[-which.max(top1_w^2)] <- 0
+names(top1_w) <- rownames(variant_df)
+final_weights$top1[match(names(top1_w), rownames(final_weights))] <- as.numeric(top1_w)
+
+# SuSiE
+susie_final <- susie(scale_Xcov, scale_ycov, L = 10, standardize = TRUE, compute_univariate_zscore = TRUE)
+susie_coef <- coef(susie_final)
+
+# If coef() returns a list, pull out the coefficient vector
+if (is.list(susie_coef)) {
+  if ("coefficients" %in% names(susie_coef)) {
+    susie_coef <- susie_coef$coefficients
+  } else if ("beta" %in% names(susie_coef)) {
+    susie_coef <- susie_coef$beta
+  } else {
+    susie_coef <- unlist(susie_coef, use.names = TRUE)
+  }
+}
+
+# If the vector length is one longer than the number of SNPs, the first element is the intercept
+if (length(susie_coef) == ncol(scale_Xcov) + 1L) {
+  susie_coef <- susie_coef[-1]
+}
+
+# Remove any unnamed/empty-string entries
+if (!is.null(names(susie_coef))) {
+  keep <- !(names(susie_coef) %in% c("", NA_character_, "(Intercept)"))
+  susie_coef <- susie_coef[keep]
+}
+
+# Now map to SNP names
+names(susie_coef) <- rownames(variant_df)
+final_weights$susie[match(names(susie_coef), rownames(final_weights))] <- as.numeric(susie_coef)
+
+# Making output directory if it doesn't already exist
+dir.create(paste0("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/predictive_modeling/", gene), showWarnings = FALSE)
+
+# save cv.performance and cv.calls for downstream analyses
+# w/ centromeres --> suffix: *.w_cent.txt; w/out centromeres --> suffix: *.wo_cent.txt (run w/out centromeres later)
+write.table(cv.calls,paste(c("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/predictive_modeling/", gene, "/",gene, ".cv.calls.wo_cent.txt"), collapse = ""),quote=F,row.names =FALSE, col.names = TRUE, sep='\t')
+
+write.table(cv.performance,paste(c("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/predictive_modeling/", gene, "/",gene, ".cv.performance.wo_cent.txt"), collapse = ""),quote=F,row.names =TRUE,col.names = TRUE,sep='\t')
 
 # save training performance for downstream analyses
-write.table(train.performance,paste(c("/gpfs/gibbs/pi/ycgh/lushjia/project/SV/AFGR/RNA/hprc_v2/edge/collapse/var_1_to_1_rescue/separate_prediction/", gene, "/",gene, ".train.performance.1kg.methods.txt"), collapse = ""),quote=F,row.names =TRUE,col.names = FALSE,sep='\t')
+write.table(train.performance,paste(c("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/predictive_modeling/", gene, "/",gene, ".train.performance.wo_cent.txt"), collapse = ""),quote=F,row.names =TRUE,col.names = FALSE,sep='\t')
 
-
-
+# write the SNP x model weight matrix
+write.table(
+  final_weights,
+  paste0("/gpfs/gibbs/pi/ycgh/amm422/project/centromere/prediction/full_variant_tests/predictive_modeling/",
+         gene, "/", gene, ".model.weights.wo_cent.tsv"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = TRUE,
+  col.names = NA
+)
